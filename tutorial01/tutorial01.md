@@ -131,7 +131,7 @@ $ ./leptjson_test
 C 语言有头文件的概念，需要使用 `#include`去引入头文件中的类型声明和函数声明。但由于头文件也可以 `#include` 其他头文件，为避免重复声明，通常会利用宏加入 include 防范（include guard）：
 
 ~~~c
-#ifndef LEPTJSON_H__
+#ifndef LEPTJSON_H__ /* ifndef 即为 if not def */
 #define LEPTJSON_H__
 
 /* ... */
@@ -214,7 +214,7 @@ true  = "true"
 
 第三行是说，我们现时的值只可以是 null、false 或 true，它们分别有对应的字面值（literal）。
 
-我们的解析器应能判断输入是否一个合法的 JSON。如果输入的 JSON 不合符这个语法，我们要产生对应的错误码，方便使用者追查问题。
+我们的解析器应能判断输入是否为一个合法的 JSON。如果输入的 JSON 不合符这个语法，我们要产生对应的错误码，方便使用者追查问题。
 
 在这个 JSON 语法子集下，我们定义 3 种错误码：
 
