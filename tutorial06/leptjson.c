@@ -39,6 +39,7 @@ static void* lept_context_push(lept_context* c, size_t size) {
     return ret;
 }
 
+// 返回栈顶指针
 static void* lept_context_pop(lept_context* c, size_t size) {
     assert(c->top >= size);
     return c->stack + (c->top -= size);
@@ -127,8 +128,8 @@ static void lept_encode_utf8(lept_context* c, unsigned u) {
 
 #define STRING_ERROR(ret) do { c->top = head; return ret; } while(0)
 
-static int lept_parse_string(lept_context* c, lept_value* v) {
-    size_t head = c->top, len;
+static int lept_parse_string_raw(lept_context* c, char** str, size_t* len) {
+    size_t head = c->top; // head 记录原始栈中的栈顶指针
     unsigned u, u2;
     const char* p;
     EXPECT(c, '\"');
@@ -137,8 +138,8 @@ static int lept_parse_string(lept_context* c, lept_value* v) {
         char ch = *p++;
         switch (ch) {
             case '\"':
-                len = c->top - head;
-                lept_set_string(v, (const char*)lept_context_pop(c, len), len);
+                *len = c->top - head;
+                *str = lept_context_pop(c, *len); // *str 指向栈顶指针，将栈中所有元素都弹出
                 c->json = p;
                 return LEPT_PARSE_OK;
             case '\\':
@@ -179,6 +180,15 @@ static int lept_parse_string(lept_context* c, lept_value* v) {
                 PUTC(c, ch);
         }
     }
+}
+
+static int lept_parse_string(lept_context* c, lept_value* v) {
+    int ret;
+    char* s;
+    size_t len;
+    if ((ret = lept_parse_string_raw(c, &s, &len)) == LEPT_PARSE_OK)
+        lept_set_string(v, s, len);
+    return ret;
 }
 
 static int lept_parse_value(lept_context* c, lept_value* v);
@@ -239,21 +249,59 @@ static int lept_parse_object(lept_context* c, lept_value* v) {
         v->u.o.size = 0;
         return LEPT_PARSE_OK;
     }
-    m.k = NULL;
+    m.k = NULL; // *(m.k) 为 key 值
     size = 0;
     for (;;) {
-        lept_init(&m.v);
+        lept_init(&m.v); // *(m.v) 为 value 值
         /* \todo parse key to m.k, m.klen */
+        if (*c->json != '"') {
+            ret = LEPT_PARSE_MISS_KEY;
+            break;
+        }
+        char* str;
+        if ((ret = lept_parse_string_raw(c, &str, &m.klen)) != LEPT_PARSE_OK)
+            break;
+        memcpy(m.k = (char*)malloc(m.klen + 1), str, m.klen);
+        m.k[m.klen] = '\0';
         /* \todo parse ws colon ws */
+        lept_parse_whitespace(c); // 移除 key 值后的空格
+        if (*c->json != ':') {
+            ret = LEPT_PARSE_MISS_COLON;
+            break;
+        }
+        c->json++; // 跳过 key 值空格后的冒号
+        lept_parse_whitespace(c); // 移除冒号后的空格，准备 parse value
         /* parse value */
         if ((ret = lept_parse_value(c, &m.v)) != LEPT_PARSE_OK)
             break;
         memcpy(lept_context_push(c, sizeof(lept_member)), &m, sizeof(lept_member));
         size++;
         m.k = NULL; /* ownership is transferred to member on stack */
-        /* \todo parse ws [comma | right-curly-brace] ws */
+        /* \todo parse ws [comma | right-curly-brace] ws */ // 即 解析逗号或右花括号
+        lept_parse_whitespace(c);
+        if (*c->json == ',') {
+            c->json++;
+            lept_parse_whitespace(c);
+        } else if (*c->json == '}') { // 嵌套对象，且嵌套对象结束
+            c->json++;
+            v->type = LEPT_OBJECT;
+            v->u.o.size = size;
+            v->u.o.m = (lept_member *) malloc(size * sizeof(lept_member));
+            memcpy(v->u.o.m, lept_context_pop(c, size * sizeof(lept_member)), size * sizeof(lept_member)); // 弹出嵌套对象
+            return LEPT_PARSE_OK;
+        } else {
+            ret = LEPT_PARSE_MISS_COMMA_OR_CURLY_BRACKET;
+            break;
+        }
     }
     /* \todo Pop and free members on the stack */
+    free(m.k);
+    for (size_t i = 0; i < size; i++) {
+        lept_member* member = (lept_member*)lept_context_pop(c, sizeof(lept_member));
+        free(member->k);
+        lept_free(&member->v);
+    }
+    v->type = LEPT_NULL;
     return ret;
 }
 
@@ -302,6 +350,13 @@ void lept_free(lept_value* v) {
             for (i = 0; i < v->u.a.size; i++)
                 lept_free(&v->u.a.e[i]);
             free(v->u.a.e);
+            break;
+        case LEPT_OBJECT:
+            for (i = 0; i < v->u.o.size; i++) {
+                lept_free(&v->u.o.m[i].v);
+                free(v->u.o.m[i].k);
+            }
+            free(v->u.o.m);
             break;
         default: break;
     }
